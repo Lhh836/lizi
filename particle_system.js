@@ -126,6 +126,9 @@ function updateParticles() {
 // ----------------------------------------------------------------
 
 const videoElement = document.getElementById('webcam-video');
+const canvasElement = document.getElementById('output-canvas');
+const canvasCtx = canvasElement.getContext('2d'); // 获取 2D 绘图上下文
+
 const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
 });
@@ -140,78 +143,74 @@ hands.setOptions({
 hands.onResults(onResults);
 
 function onResults(results) {
+    // 1. 绘制手部骨架 (调试可视化)
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    
+    // 绘制视频帧
+    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         handDetected = true;
         handLandmarks = results.multiHandLandmarks[0];
         
-        // 1. 计算指尖距离 (用于缩放/扩散)
-        // 选取拇指尖 (4) 和小指尖 (20)
+        // 绘制手部连接线
+        drawConnectors(canvasCtx, handLandmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 5 });
+        // 绘制关键点
+        drawLandmarks(canvasCtx, handLandmarks, { color: '#FF0000', lineWidth: 2 });
+        
+        // 2. 计算指尖距离 (用于缩放/扩散)
         const thumbTip = handLandmarks[4];
         const pinkyTip = handLandmarks[20];
         
-        // 估算屏幕空间距离 (使用简单的欧几里得距离)
         const distanceX = thumbTip.x - pinkyTip.x;
         const distanceY = thumbTip.y - pinkyTip.y;
         const fingerDistance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
         
         // 将距离映射到粒子扩散半径 (0.05 到 0.4 映射到 MIN_SPREAD 到 MAX_SPREAD)
-        let mappedSpread = mapLinear(fingerDistance, 0.05, 0.4, MIN_SPREAD, MAX_SPREAD);
+        let mappedSpread = THREE.MathUtils.mapLinear(fingerDistance, 0.05, 0.4, MIN_SPREAD, MAX_SPREAD);
         
-        // 2. 检测握拳/张开手掌 (用于聚集/分散的特殊效果)
-        // 简化检测：检查食指尖(8)是否低于食指第二关节(6)
+        // 3. 检测握拳/张开手掌
         const indexTipY = handLandmarks[8].y;
         const indexKnuckleY = handLandmarks[6].y;
         
-        // 如果指尖低于关节，则认为是握拳 (Y轴在MediaPipe中通常是向下增加的)
-        // 增加一个阈值来判断是否"低于"
         isClenched = (indexTipY > indexKnuckleY - 0.05); 
         
         if (isClenched) {
             // 握拳：粒子聚集到最小半径
-            currentSpreadRadius = lerp(currentSpreadRadius, MIN_SPREAD, 0.1);
+            currentSpreadRadius = THREE.MathUtils.lerp(currentSpreadRadius, MIN_SPREAD, 0.1);
         } else {
             // 张开手掌：使用映射的指尖距离控制扩散
-            currentSpreadRadius = lerp(currentSpreadRadius, mappedSpread, 0.1);
+            currentSpreadRadius = THREE.MathUtils.lerp(currentSpreadRadius, mappedSpread, 0.1);
         }
+        
+        // 4. 调试输出 (检查控制变量是否变化)
+        console.log(`--- Hand Detected ---`);
+        console.log(`Finger Distance (Raw): ${fingerDistance.toFixed(3)}`);
+        console.log(`Is Clenched: ${isClenched}`);
+        console.log(`Current Spread Radius: ${currentSpreadRadius.toFixed(2)}`);
         
     } else {
         handDetected = false;
         // 如果手势丢失，粒子缓慢恢复到初始状态
-        currentSpreadRadius = lerp(currentSpreadRadius, INITIAL_SPREAD, 0.02);
+        currentSpreadRadius = THREE.MathUtils.lerp(currentSpreadRadius, INITIAL_SPREAD, 0.02);
     }
+    
+    canvasCtx.restore();
 }
 
 // 启动摄像头
-function startCamera() {
-    try {
-        // 检查是否支持摄像头
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            console.warn('摄像头功能不可用');
-            return;
+const cameraUtil = new Camera(videoElement, {
+    onFrame: async () => {
+        // 必须确保 videoElement 已经加载了数据
+        if (videoElement.readyState >= 2) {
+             await hands.send({ image: videoElement });
         }
-
-        navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => {
-                videoElement.srcObject = stream;
-                videoElement.play();
-                
-                // 使用requestAnimationFrame替代Camera类
-                function processFrame() {
-                    if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
-                        hands.send({ image: videoElement });
-                    }
-                    requestAnimationFrame(processFrame);
-                }
-                processFrame();
-            })
-            .catch(error => {
-                console.error('摄像头访问失败:', error);
-                console.log('项目将继续运行，但手势交互功能不可用');
-            });
-    } catch (error) {
-        console.error('摄像头初始化失败:', error);
-    }
-}
+    },
+    width: 640,
+    height: 480
+});
+cameraUtil.start();
 
 
 // ----------------------------------------------------------------
