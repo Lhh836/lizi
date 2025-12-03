@@ -126,8 +126,10 @@ function updateParticles() {
 // ----------------------------------------------------------------
 
 const videoElement = document.getElementById('webcam-video');
+// 即使隐藏了，我们仍然需要获取 canvasCtx 来满足 MediaPipe 的 onResults 接口要求，
+// 但我们不再执行实际的绘图操作。
 const canvasElement = document.getElementById('output-canvas');
-const canvasCtx = canvasElement.getContext('2d'); // 获取 2D 绘图上下文
+const canvasCtx = canvasElement.getContext('2d'); 
 
 const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
@@ -143,23 +145,14 @@ hands.setOptions({
 hands.onResults(onResults);
 
 function onResults(results) {
-    // 1. 绘制手部骨架 (调试可视化)
-    canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    // 移除所有 canvasCtx.drawImage 和 drawConnectors/drawLandmarks 调用
+    // 仅保留核心逻辑
     
-    // 绘制视频帧
-    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         handDetected = true;
         handLandmarks = results.multiHandLandmarks[0];
         
-        // 绘制手部连接线
-        drawConnectors(canvasCtx, handLandmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 5 });
-        // 绘制关键点
-        drawLandmarks(canvasCtx, handLandmarks, { color: '#FF0000', lineWidth: 2 });
-        
-        // 2. 计算指尖距离 (用于缩放/扩散)
+        // 1. 计算指尖距离 (用于缩放/扩散)
         const thumbTip = handLandmarks[4];
         const pinkyTip = handLandmarks[20];
         
@@ -167,10 +160,10 @@ function onResults(results) {
         const distanceY = thumbTip.y - pinkyTip.y;
         const fingerDistance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
         
-        // 将距离映射到粒子扩散半径 (0.05 到 0.4 映射到 MIN_SPREAD 到 MAX_SPREAD)
+        // 映射范围 (请根据您在上一轮调试中确定的最佳范围进行调整)
         let mappedSpread = THREE.MathUtils.mapLinear(fingerDistance, 0.05, 0.4, MIN_SPREAD, MAX_SPREAD);
         
-        // 3. 检测握拳/张开手掌
+        // 2. 检测握拳/张开手掌
         const indexTipY = handLandmarks[8].y;
         const indexKnuckleY = handLandmarks[6].y;
         
@@ -184,26 +177,20 @@ function onResults(results) {
             currentSpreadRadius = THREE.MathUtils.lerp(currentSpreadRadius, mappedSpread, 0.1);
         }
         
-        // 4. 调试输出 (检查控制变量是否变化)
-        console.log(`--- Hand Detected ---`);
-        console.log(`Finger Distance (Raw): ${fingerDistance.toFixed(3)}`);
-        console.log(`Is Clenched: ${isClenched}`);
-        console.log(`Current Spread Radius: ${currentSpreadRadius.toFixed(2)}`);
+        // 调试输出 (确认手势仍在工作)
+        console.log(`Spread: ${currentSpreadRadius.toFixed(2)}, Clenched: ${isClenched}`);
         
     } else {
         handDetected = false;
-        // 如果手势丢失，粒子缓慢恢复到初始状态
         currentSpreadRadius = THREE.MathUtils.lerp(currentSpreadRadius, INITIAL_SPREAD, 0.02);
     }
-    
-    canvasCtx.restore();
 }
 
 // 启动摄像头
 const cameraUtil = new Camera(videoElement, {
     onFrame: async () => {
-        // 必须确保 videoElement 已经加载了数据
         if (videoElement.readyState >= 2) {
+             // MediaPipe 仍然需要一个图像源来处理
              await hands.send({ image: videoElement });
         }
     },
