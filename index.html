@@ -45,5 +45,45 @@
 
     <!-- 核心逻辑脚本 -->
     <script src="particle_system.js"></script>
+</body><body>
+    <!-- 1. 调试信息框 (手机端查看关键信息) -->
+    <div id="mobile-debug" style="
+        position: absolute; 
+        top: 10px; 
+        left: 10px; 
+        color: #00ff00; 
+        font-size: 12px; 
+        z-index: 9999; 
+        background: rgba(0,0,0,0.6); 
+        padding: 5px;
+        pointer-events: none;
+        font-family: monospace;
+        white-space: pre-wrap;">
+        正在初始化...
+    </div>
+
+    <!-- 2. 3D 渲染容器 -->
+    <div id="container"></div>
+
+    <!-- 3. 摄像头视频流 (关键修改) -->
+    <!-- 注意：不要用 display:none，改用 opacity:0 且定位到屏幕外 -->
+    <!-- 必须添加 playsinline 属性，否则手机上无法自动播放 -->
+    <video id="webcam-video" 
+           style="position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; z-index: -1;" 
+           playsinline 
+           webkit-playsinline 
+           muted 
+           autoplay>
+    </video>
+
+    <!-- 4. 引入库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+    <!-- 5. 核心逻辑 -->
+    <script src="particle_system.js"></script>
 </body>
 </html>

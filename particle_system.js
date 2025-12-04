@@ -1,5 +1,5 @@
 // --- 全局配置 ---
-const NUM_PARTICLES = 6000;
+const NUM_PARTICLES = 4000;
 const INITIAL_SPREAD = 50;
 const MAX_SPREAD = 150;
 const MIN_SPREAD = 10;
@@ -278,11 +278,8 @@ function onResults(results) {
         
         const currentGesture = getGesture(handLandmarks);
         // --- 更新手机屏幕上的调试文字 ---
-        debugDiv.innerHTML = `
-            状态: ${appState}<br>
-            手势: ${currentGesture}<br>
-            握拳计数: ${fistCount}
-        `;
+        if(debugDiv) {
+            debugDiv.innerHTML = `状态: ${appState}\n手势: ${currentGesture}\nFPS: 运行中`;
         
         // 状态机控制
         switch (currentGesture) {
@@ -325,6 +322,12 @@ function onResults(results) {
                 // 如果手势不明确，保持当前状态
                 break;
         }
+    }else {
+        handDetected = false;
+        if(debugDiv) {
+            debugDiv.innerHTML = `状态: ${appState}\n未检测到手部\n请将手放入画面`;
+        }
+    }
         
     } else {
         handDetected = false;
@@ -387,25 +390,31 @@ function changeState(newState) {
 }
 
 // 启动摄像头
-const cameraUtil = new Camera(videoElement, {
-    onFrame: async () => {
-        if (videoElement.readyState >= 2) {
-             await hands.send({ image: videoElement });
-        }
-    },
-    width: 640,
-    height: 480,
-    facingMode: 'user'
-});
-
-// 启动逻辑
-cameraUtil.start()
-    .then(() => {
-        document.getElementById('mobile-debug').innerText = "摄像头启动成功，正在加载模型...";
-    })
-    .catch(err => {
-        document.getElementById('mobile-debug').innerText = "错误: " + err.message;
+if (videoElement) {
+    const cameraUtil = new Camera(videoElement, {
+        onFrame: async () => {
+            // 只有当视频真正开始播放且有数据时才发送
+            if (videoElement.readyState >= 2) {
+                 await hands.send({ image: videoElement });
+            }
+        },
+        width: 640, 
+        height: 480,
+        facingMode: 'user' // 尝试请求前置摄像头
     });
+
+    cameraUtil.start()
+        .then(() => {
+            console.log("摄像头启动成功");
+            if(debugDiv) debugDiv.innerHTML = "摄像头已启动\n正在加载模型...";
+        })
+        .catch(err => {
+            console.error("摄像头启动失败", err);
+            if(debugDiv) debugDiv.innerHTML = "错误: 无法启动摄像头\n" + err.message;
+        });
+} else {
+    console.error("找不到 video 元素");
+}
 // 关键修改：使用 try...catch 捕获启动错误
 try {
     cameraUtil.start();
