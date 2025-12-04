@@ -1,5 +1,5 @@
 // --- 全局配置 ---
-const NUM_PARTICLES = 20000;
+const NUM_PARTICLES = 6000;
 const INITIAL_SPREAD = 50;
 const MAX_SPREAD = 150;
 const MIN_SPREAD = 10;
@@ -269,6 +269,7 @@ function getGesture(landmarks) {
 }
 
 let fistCount = 0; // 记录握拳次数，用于触发照片序列
+const debugDiv = document.getElementById('mobile-debug');
 
 function onResults(results) {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
@@ -276,6 +277,12 @@ function onResults(results) {
         handLandmarks = results.multiHandLandmarks[0];
         
         const currentGesture = getGesture(handLandmarks);
+        // --- 更新手机屏幕上的调试文字 ---
+        debugDiv.innerHTML = `
+            状态: ${appState}<br>
+            手势: ${currentGesture}<br>
+            握拳计数: ${fistCount}
+        `;
         
         // 状态机控制
         switch (currentGesture) {
@@ -321,6 +328,7 @@ function onResults(results) {
         
     } else {
         handDetected = false;
+        debugDiv.innerHTML = `未检测到手部<br>请将手移入画面`;
         // 如果手势丢失，粒子缓慢恢复到初始状态 (可选：可以保持当前形状)
         // currentSpreadRadius = THREE.MathUtils.lerp(currentSpreadRadius, INITIAL_SPREAD, 0.02);
     }
@@ -386,9 +394,18 @@ const cameraUtil = new Camera(videoElement, {
         }
     },
     width: 640,
-    height: 480
+    height: 480,
+    facingMode: 'user'
 });
 
+// 启动逻辑
+cameraUtil.start()
+    .then(() => {
+        document.getElementById('mobile-debug').innerText = "摄像头启动成功，正在加载模型...";
+    })
+    .catch(err => {
+        document.getElementById('mobile-debug').innerText = "错误: " + err.message;
+    });
 // 关键修改：使用 try...catch 捕获启动错误
 try {
     cameraUtil.start();
