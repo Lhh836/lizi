@@ -1,360 +1,681 @@
 // =================================================================
-// 完整版 particle_system.js
-// 包含：手势识别、数字形状、爱心形状、照片放映、手机端适配
+// 粒子交互系统 - 完整版 (回忆录 + 烟花文字祝福)
 // =================================================================
 
-// --- 1. 全局配置与变量 ---
-const NUM_PARTICLES = 6000; // 手机端优化粒子数
-const INITIAL_SPREAD = 50;
-const PHOTO_DURATION = 5000; // 照片放映时间
+// --- 1. 全局配置 ---
+const NUM_PARTICLES = 6000;
+const LERP_SPEED = 0.08;
 
+// --- 照片配置 ---
+const MAIN_PHOTO_STAY_TIME = 3000; 
+const MEMORY_SPAWN_INTERVAL = 400; 
+const MEMORY_FLIGHT_SPEED = 8; 
+
+// 回忆照片列表
+const PHOTO_LIST = [];
+for (let i = 1; i <= 30; i++) {
+    PHOTO_LIST.push(`${i}.jpg`);
+}
+
+// --- 祝福文案配置 ---
+const TEXT_PHRASES = [
+    "祝菜菜新年快乐",
+    "新的一年里",
+    "希望你更加快乐、美丽",
+    "在香港也要天天开心",
+    "好好吃饭",
+    "等你回来"
+];
+const TEXT_DISPLAY_DURATION = 3500; // 每句文案展示时间 (毫秒)
+
+// 颜色配置
+const COLORS = {
+    SPHERE: new THREE.Color(0x00ffff),
+    HEART:  new THREE.Color(0xff69b4),
+    NUM_1:  new THREE.Color(0x00ff00),
+    NUM_2:  new THREE.Color(0xffff00),
+    NUM_3:  new THREE.Color(0xff0000),
+    STAR:   new THREE.Color(0xffffff),
+    TEXT:   new THREE.Color(0xffd700) // 金色文字
+};
+
+// 核心变量
 let scene, camera, renderer, particles, geometry, material;
-let videoElement, canvasElement, canvasCtx;
-let handDetected = false;
-let handLandmarks = null;
+let videoElement;
+let appState = 'INITIAL';
+let targetPositions = [];
+let targetColor = COLORS.SPHERE;
 
-// 状态管理
-let appState = 'INITIAL'; // 'INITIAL', 'SPHERE', 'HEART', 'NUMBER_1', 'NUMBER_2', 'NUMBER_3', 'PHOTO_SEQUENCE'
-let targetPositions = []; 
-let photoMesh = null;
-let photoTexture = null;
-let photoStartTime = 0;
-let fistCount = 0;
+// 照片系统变量
+let mainPhotoMesh;
+let memoryGroup = new THREE.Group();
+let textureLoader = new THREE.TextureLoader();
+let loadedTextures = {};
 
-// 颜色控制
-let targetParticleColor = new THREE.Color(0x00ffff); // 初始青色
+// 动画控制变量
+let sequenceStartTime = 0;
+let isSequenceActive = false; // 用于照片回忆
+let memoryIndex = 0;
+let lastSpawnTime = 0;
 
-// 调试元素引用
+// 烟花与文字变量
+let isFireworksActive = false;
+let textSequenceIndex = 0;
+let lastTextChangeTime = 0;
+let fireworksSystem; // 烟花系统实例
+
+// 手势变量
+let fistHoldCount = 0;
+const FIST_TRIGGER_THRESHOLD = 40;
 const debugDiv = document.getElementById('mobile-debug');
 
-// --- 2. 形状生成函数 ---
+// --- 2. 形状生成算法 ---
 
-function generateSpherePositions(count, radius) {
-    const positions = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-        const r = radius * Math.cbrt(Math.random());
+function generateSphere(r) {
+    const pos = [];
+    for(let i=0; i<NUM_PARTICLES; i++){
+        const radius = r * Math.cbrt(Math.random());
         const theta = Math.random() * 2 * Math.PI;
         const phi = Math.acos(2 * Math.random() - 1);
-        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-        positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-        positions[i * 3 + 2] = r * Math.cos(phi);
+        pos.push(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.sin(phi) * Math.sin(theta),
+            radius * Math.cos(phi)
+        );
     }
-    return positions;
+    return new Float32Array(pos);
 }
 
-function generateHeartPositions(count, scale) {
-    const positions = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-        const t = Math.random() * 2 * Math.PI;
-        // 心形公式
-        const x = scale * 16 * Math.pow(Math.sin(t), 3);
-        const y = -scale * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
-        const z = (Math.random() - 0.5) * scale * 5;
-        positions[i * 3] = x;
-        positions[i * 3 + 1] = y;
-        positions[i * 3 + 2] = z;
+function generateHeart(scale) {
+    const pos = [];
+    for(let i=0; i<NUM_PARTICLES; i++){
+        let t = Math.random() * 2 * Math.PI;
+        let x = 16 * Math.pow(Math.sin(t), 3);
+        let y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+        const r = Math.sqrt(Math.random());
+        x *= r * scale;
+        y *= r * scale;
+        pos.push(x, y, (Math.random()-0.5) * 10);
     }
-    return positions;
+    return new Float32Array(pos);
 }
 
-// 简化的数字形状生成 (用不同位置的球体模拟)
-function generateTextPositions(text, count, scale) {
-    // 这里为了简化代码，用不同位置的球体代表数字位置
-    // 实际项目中可以使用 TextGeometry 获取点
-    const positions = new Float32Array(count * 3);
-    let offsetX = 0;
-    if (text === '1') offsetX = -20;
-    if (text === '2') offsetX = 0;
-    if (text === '3') offsetX = 20;
+function generateNumber(num, scale) {
+    const pos = [];
+    const points = [];
+    const baseSize = 20;
+    if (num === '1') {
+        for(let y=-1; y<=1; y+=0.05) points.push([0, y]);
+    } else if (num === '2') {
+        for(let t=0; t<=Math.PI; t+=0.1) points.push([0.5*Math.cos(t), 0.5*Math.sin(t) + 0.5]);
+        for(let t=0; t<=1; t+=0.05) points.push([0.5 - t, 0.5 - t * 1.5]);
+        for(let x=-0.5; x<=0.5; x+=0.05) points.push([x, -1]);
+    } else if (num === '3') {
+        for(let t=-Math.PI/2; t<=Math.PI/2; t+=0.1) points.push([0.5*Math.cos(t), 0.5*Math.sin(t) + 0.5]);
+        for(let t=-Math.PI/2; t<=Math.PI/2; t+=0.1) points.push([0.5*Math.cos(t), 0.5*Math.sin(t) - 0.5]);
+    }
+    for(let i=0; i<NUM_PARTICLES; i++) {
+        const p = points[Math.floor(Math.random() * points.length)];
+        const jitter = 0.15;
+        pos.push(
+            (p[0] + (Math.random()-0.5)*jitter) * scale * baseSize,
+            (p[1] + (Math.random()-0.5)*jitter) * scale * baseSize,
+            (Math.random()-0.5) * 5
+        );
+    }
+    return new Float32Array(pos);
+}
 
-    for (let i = 0; i < count; i++) {
-        const r = scale * Math.cbrt(Math.random());
-        const theta = Math.random() * 2 * Math.PI;
-        const phi = Math.acos(2 * Math.random() - 1);
+function generateStarField() {
+    const pos = [];
+    for(let i=0; i<NUM_PARTICLES; i++){
+        pos.push(
+            (Math.random() - 0.5) * 1000,
+            (Math.random() - 0.5) * 800,
+            (Math.random() - 0.5) * 1000
+        );
+    }
+    return new Float32Array(pos);
+}
+
+// --- 新增：文字粒子生成算法 ---
+function generateTextPositions(text) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    // 设置画布大小，越大粒子越精细，但性能消耗越大
+    canvas.width = 1024; 
+    canvas.height = 512;
+    
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // 文字样式
+    ctx.font = 'bold 120px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    const points = [];
+    
+    // 扫描像素
+    // step 越小粒子越密
+    const step = 4; 
+    for (let y = 0; y < canvas.height; y += step) {
+        for (let x = 0; x < canvas.width; x += step) {
+            const index = (y * canvas.width + x) * 4;
+            // 如果红色通道大于128（即接近白色），则认为这里有字
+            if (data[index] > 128) {
+                points.push({
+                    x: (x - canvas.width / 2) * 0.3, // 0.3 是缩放系数
+                    y: -(y - canvas.height / 2) * 0.3
+                });
+            }
+        }
+    }
+    
+    const pos = [];
+    for(let i=0; i<NUM_PARTICLES; i++) {
+        // 如果粒子数多于文字点数，随机取点；如果少于，随机重复
+        const p = points.length > 0 ? points[Math.floor(Math.random() * points.length)] : {x:0, y:0};
+        pos.push(
+            p.x + (Math.random()-0.5) * 1.5, // 加一点抖动
+            p.y + (Math.random()-0.5) * 1.5,
+            (Math.random()-0.5) * 5 // Z轴扁平
+        );
+    }
+    return new Float32Array(pos);
+}
+
+// --- 3. 烟花系统 ---
+
+class FireworksSystem {
+    constructor(scene) {
+        this.scene = scene;
+        this.fireworks = [];
+        this.geometry = new THREE.BufferGeometry();
+        this.material = new THREE.PointsMaterial({
+            size: 3,
+            vertexColors: true,
+            transparent: true,
+            opacity: 1,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
         
-        // 生成一个偏离中心的球体来代表数字
-        positions[i * 3] = (r * Math.sin(phi) * Math.cos(theta)) + offsetX;
-        positions[i * 3 + 1] = (r * Math.sin(phi) * Math.sin(theta));
-        positions[i * 3 + 2] = (r * Math.cos(phi));
+        // 预分配烟花粒子池 (3000个粒子)
+        this.maxParticles = 3000;
+        this.positions = new Float32Array(this.maxParticles * 3);
+        this.colors = new Float32Array(this.maxParticles * 3);
+        this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+        this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+        
+        this.mesh = new THREE.Points(this.geometry, this.material);
+        this.mesh.visible = false;
+        this.scene.add(this.mesh);
+        
+        // 粒子数据
+        this.particlesData = [];
+        for(let i=0; i<this.maxParticles; i++) {
+            this.particlesData.push({
+                vx: 0, vy: 0, vz: 0,
+                life: 0,
+                active: false
+            });
+        }
     }
-    return positions;
+
+    start() {
+        this.mesh.visible = true;
+    }
+
+    stop() {
+        this.mesh.visible = false;
+        // 重置所有粒子
+        for(let i=0; i<this.maxParticles; i++) {
+            this.particlesData[i].active = false;
+            this.positions[i*3+1] = -1000; // 移出屏幕
+        }
+    }
+
+    // 发射一个烟花
+    launch() {
+        const centerX = (Math.random() - 0.5) * 200;
+        const centerY = (Math.random() - 0.5) * 100 + 20;
+        const color = new THREE.Color().setHSL(Math.random(), 1, 0.6);
+        
+        // 每次爆炸激活 100 个粒子
+        let count = 0;
+        for(let i=0; i<this.maxParticles; i++) {
+            if(!this.particlesData[i].active) {
+                this.particlesData[i].active = true;
+                this.particlesData[i].life = 1.0;
+                
+                // 位置
+                this.positions[i*3] = centerX;
+                this.positions[i*3+1] = centerY;
+                this.positions[i*3+2] = -100; // 背景深处
+                
+                // 速度 (球形爆炸)
+                const speed = 1 + Math.random() * 2;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.random() * Math.PI;
+                
+                this.particlesData[i].vx = speed * Math.sin(phi) * Math.cos(theta);
+                this.particlesData[i].vy = speed * Math.sin(phi) * Math.sin(theta);
+                this.particlesData[i].vz = speed * Math.cos(phi);
+                
+                // 颜色
+                this.colors[i*3] = color.r;
+                this.colors[i*3+1] = color.g;
+                this.colors[i*3+2] = color.b;
+                
+                count++;
+                if(count >= 100) break;
+            }
+        }
+    }
+
+    update() {
+        if(!this.mesh.visible) return;
+        
+        // 随机发射
+        if(Math.random() < 0.05) this.launch();
+
+        for(let i=0; i<this.maxParticles; i++) {
+            if(this.particlesData[i].active) {
+                const p = this.particlesData[i];
+                
+                // 移动
+                this.positions[i*3] += p.vx;
+                this.positions[i*3+1] += p.vy;
+                this.positions[i*3+2] += p.vz;
+                
+                // 重力
+                p.vy -= 0.05;
+                // 阻力
+                p.vx *= 0.96;
+                p.vy *= 0.96;
+                p.vz *= 0.96;
+                
+                // 生命衰减
+                p.life -= 0.015;
+                
+                // 闪烁效果 (修改位置让它看起来在闪，或者修改颜色)
+                if(p.life <= 0) {
+                    p.active = false;
+                    this.positions[i*3] = 0;
+                    this.positions[i*3+1] = -1000; // 藏起来
+                }
+            }
+        }
+        this.geometry.attributes.position.needsUpdate = true;
+        this.geometry.attributes.color.needsUpdate = true;
+    }
 }
 
-// --- 3. 状态切换逻辑 ---
+// --- 4. 状态与资源管理 ---
 
-function changeState(newState) {
-    if (appState === newState) return;
-    
+function switchState(newState) {
+    // 避免重复触发相同状态 (除了照片和烟花序列)
+    if (appState === newState && newState !== 'PHOTO_SEQUENCE' && newState !== 'FIREWORKS_SEQUENCE') return;
+
     appState = newState;
-    console.log(`状态切换为: ${newState}`);
-    if(debugDiv) debugDiv.innerText = `状态切换: ${newState}`;
-    
-    targetPositions = []; 
-    
-    switch (newState) {
+    if(debugDiv) debugDiv.innerText = `状态: ${newState}`;
+
+    // 离开烟花状态时，关闭烟花
+    if (newState !== 'FIREWORKS_SEQUENCE' && fireworksSystem) {
+        fireworksSystem.stop();
+        isFireworksActive = false;
+    }
+
+    switch(newState) {
         case 'SPHERE':
-            targetPositions = generateSpherePositions(NUM_PARTICLES, 20);
-            targetParticleColor.set(0x00ffff); // 青色
+            targetPositions = generateSphere(35);
+            targetColor = COLORS.SPHERE;
+            resetPhotoSequence();
             break;
         case 'HEART':
-            targetPositions = generateHeartPositions(NUM_PARTICLES, 1.5);
-            targetParticleColor.set(0xff69b4); // 粉色
+            targetPositions = generateHeart(3.5);
+            targetColor = COLORS.HEART;
+            resetPhotoSequence();
             break;
         case 'NUMBER_1':
-            targetPositions = generateTextPositions('1', NUM_PARTICLES, 15);
-            targetParticleColor.set(0x00ff00); // 绿色
+            targetPositions = generateNumber('1', 4.0);
+            targetColor = COLORS.NUM_1;
+            resetPhotoSequence();
             break;
         case 'NUMBER_2':
-            targetPositions = generateTextPositions('2', NUM_PARTICLES, 15);
-            targetParticleColor.set(0xffff00); // 黄色
+            targetPositions = generateNumber('2', 4.0);
+            targetColor = COLORS.NUM_2;
+            resetPhotoSequence();
             break;
         case 'NUMBER_3':
-            targetPositions = generateTextPositions('3', NUM_PARTICLES, 15);
-            targetParticleColor.set(0xff0000); // 红色
+            targetPositions = generateNumber('3', 4.0);
+            targetColor = COLORS.NUM_3;
+            resetPhotoSequence();
             break;
         case 'PHOTO_SEQUENCE':
-            photoStartTime = Date.now();
-            targetPositions = []; // 此时粒子进入星空模式
-            targetParticleColor.set(0xaaaaee);
+            startPhotoSequence();
             break;
-        default:
-            targetPositions = [];
+        case 'FIREWORKS_SEQUENCE':
+            startFireworksSequence();
+            break;
     }
 }
 
-// --- 4. Three.js 初始化与动画 ---
+function preloadTextures() {
+    PHOTO_LIST.forEach(filename => {
+        textureLoader.load(filename, (tex) => {
+            loadedTextures[filename] = tex;
+        }, undefined, (err) => console.log(`跳过: ${filename}`));
+    });
+}
 
-function initThreeJS() {
+// --- 序列逻辑：照片 ---
+function startPhotoSequence() {
+    isSequenceActive = true;
+    sequenceStartTime = Date.now();
+    targetPositions = generateStarField();
+    targetColor = COLORS.STAR;
+
+    if(mainPhotoMesh) {
+        mainPhotoMesh.visible = true;
+        mainPhotoMesh.position.z = -800;
+        mainPhotoMesh.material.opacity = 0;
+    }
+    memoryIndex = 0;
+    lastSpawnTime = 0;
+    while(memoryGroup.children.length > 0){ 
+        memoryGroup.remove(memoryGroup.children[0]); 
+    }
+}
+
+function resetPhotoSequence() {
+    isSequenceActive = false;
+    if(mainPhotoMesh) mainPhotoMesh.visible = false;
+    memoryGroup.children.forEach(mesh => mesh.visible = false);
+}
+
+// --- 序列逻辑：烟花文字 ---
+function startFireworksSequence() {
+    isFireworksActive = true;
+    textSequenceIndex = 0;
+    lastTextChangeTime = Date.now();
+    
+    // 启动烟花系统
+    fireworksSystem.start();
+    
+    // 设置第一句文案
+    targetPositions = generateTextPositions(TEXT_PHRASES[0]);
+    targetColor = COLORS.TEXT;
+    
+    resetPhotoSequence(); // 确保照片不显示
+}
+
+// --- 5. Three.js 核心 ---
+
+function initThree() {
     const container = document.getElementById('container');
-    
-    // 场景
     scene = new THREE.Scene();
-    
-    // 相机
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1000);
-    camera.position.z = 100;
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 2000);
+    camera.position.z = 120;
 
-    // 渲染器
     renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
-    // 粒子
+    // 1. 主粒子系统
     geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(NUM_PARTICLES * 3);
-    
-    // 初始随机位置
-    for (let i = 0; i < NUM_PARTICLES * 3; i++) {
-        positions[i] = (Math.random() - 0.5) * INITIAL_SPREAD * 2;
-    }
-    
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    
+    const initialPos = generateSphere(35);
+    geometry.setAttribute('position', new THREE.BufferAttribute(initialPos, 3));
     material = new THREE.PointsMaterial({
-        color: targetParticleColor,
-        size: 0.8,
+        color: COLORS.SPHERE,
+        size: 1.2,
         transparent: true,
-        opacity: 0.8
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending
     });
-    
     particles = new THREE.Points(geometry, material);
     scene.add(particles);
 
-    // 加载照片
-    const textureLoader = new THREE.TextureLoader();
-    photoTexture = textureLoader.load('my_photo.jpg', 
-        () => console.log("照片纹理加载成功。"),
-        undefined,
-        (err) => console.error("照片加载失败", err)
-    );
+    // 2. 烟花系统
+    fireworksSystem = new FireworksSystem(scene);
 
-    const photoGeo = new THREE.PlaneGeometry(40, 30);
-    const photoMat = new THREE.MeshBasicMaterial({ map: photoTexture, transparent: true, opacity: 0 });
-    photoMesh = new THREE.Mesh(photoGeo, photoMat);
-    photoMesh.position.z = -200;
-    scene.add(photoMesh);
+    // 3. 照片 Mesh
+    textureLoader.load('my_photo.jpg', (texture) => {
+        const aspect = texture.image.width / texture.image.height;
+        const displayHeight = 130; 
+        const pGeo = new THREE.PlaneGeometry(displayHeight * aspect, displayHeight);
+        const pMat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0 });
+        mainPhotoMesh = new THREE.Mesh(pGeo, pMat);
+        mainPhotoMesh.visible = false;
+        scene.add(mainPhotoMesh);
+    });
 
-    window.addEventListener('resize', onWindowResize);
-    
+    scene.add(memoryGroup);
+    preloadTextures();
+
+    targetPositions = initialPos;
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
     animate();
 }
 
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+function spawnMemoryPhoto(filename) {
+    const tex = loadedTextures[filename];
+    if (!tex) return; 
+
+    const aspect = tex.image.width / tex.image.height;
+    const height = 100; 
+    const width = height * aspect;
+
+    const geo = new THREE.PlaneGeometry(width, height);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0 });
+    const mesh = new THREE.Mesh(geo, mat);
+
+    const randomX = (Math.random() - 0.5) * 100; 
+    const randomY = (Math.random() - 0.5) * 60;
+
+    mesh.position.set(randomX, randomY, -1000); 
+    mesh.userData = { speed: MEMORY_FLIGHT_SPEED + Math.random() * 2 }; 
+
+    memoryGroup.add(mesh);
 }
 
-function updateParticles() {
+function update() {
     const positions = geometry.attributes.position.array;
-    const lerpFactor = 0.05;
 
-    if (appState === 'PHOTO_SEQUENCE') {
-        // 星空漂移
-        for (let i = 0; i < NUM_PARTICLES; i++) {
-            const i3 = i * 3;
-            positions[i3] += (positions[i3] > 0 ? 1 : -1) * 0.1;
-            positions[i3 + 1] += (positions[i3 + 1] > 0 ? 1 : -1) * 0.1;
-            positions[i3 + 2] += (positions[i3 + 2] > 0 ? 1 : -1) * 0.1;
+    // 1. 主粒子移动
+    if (targetPositions.length > 0) {
+        for(let i=0; i<NUM_PARTICLES; i++) {
+            const i3 = i*3;
+            positions[i3]   += (targetPositions[i3] - positions[i3]) * LERP_SPEED;
+            positions[i3+1] += (targetPositions[i3+1] - positions[i3+1]) * LERP_SPEED;
+            positions[i3+2] += (targetPositions[i3+2] - positions[i3+2]) * LERP_SPEED;
         }
-        
-        // 照片动画
-        const elapsedTime = Date.now() - photoStartTime;
-        const progress = Math.min(1, elapsedTime / PHOTO_DURATION);
-        
-        photoMesh.position.z = THREE.MathUtils.lerp(-200, 0, progress);
-        photoMesh.material.opacity = progress;
-        
-        if (elapsedTime > PHOTO_DURATION + 2000) { // 多展示2秒
-            changeState('HEART');
-        }
+        geometry.attributes.position.needsUpdate = true;
+    }
 
-    } else if (targetPositions.length > 0) {
-        // 移动到目标形状
-        for (let i = 0; i < NUM_PARTICLES; i++) {
-            const i3 = i * 3;
-            const targetX = targetPositions[i3 % targetPositions.length];
-            const targetY = targetPositions[(i3 + 1) % targetPositions.length];
-            const targetZ = targetPositions[(i3 + 2) % targetPositions.length];
-            
-            positions[i3] = THREE.MathUtils.lerp(positions[i3], targetX, lerpFactor);
-            positions[i3 + 1] = THREE.MathUtils.lerp(positions[i3 + 1], targetY, lerpFactor);
-            positions[i3 + 2] = THREE.MathUtils.lerp(positions[i3 + 2], targetZ, lerpFactor);
-        }
-        
-        // 隐藏照片
-        if (photoMesh.material.opacity > 0) {
-            photoMesh.material.opacity -= 0.05;
-            photoMesh.position.z = -200;
-        }
+    material.color.lerp(targetColor, 0.05);
+
+    // 2. 旋转逻辑
+    // 在烟花文字模式下，不要旋转，否则字会歪
+    if (appState === 'FIREWORKS_SEQUENCE' || appState === 'NUMBER_1' || appState === 'NUMBER_2' || appState === 'NUMBER_3') {
+        particles.rotation.y += (0 - particles.rotation.y) * 0.05; // 回正
     } else {
-        // 默认漂移
-        for (let i = 0; i < NUM_PARTICLES * 3; i++) {
-            positions[i] += (Math.random() - 0.5) * 0.05;
+        particles.rotation.y += 0.002; // 其他模式旋转
+    }
+
+    // 3. 烟花系统更新
+    if (isFireworksActive && fireworksSystem) {
+        fireworksSystem.update();
+        
+        // 文字切换逻辑
+        if (Date.now() - lastTextChangeTime > TEXT_DISPLAY_DURATION) {
+            textSequenceIndex++;
+            if (textSequenceIndex < TEXT_PHRASES.length) {
+                // 切换下一句
+                targetPositions = generateTextPositions(TEXT_PHRASES[textSequenceIndex]);
+                lastTextChangeTime = Date.now();
+            } else {
+                // 播放完毕，回到爱心
+                switchState('HEART');
+            }
         }
     }
-    
-    geometry.attributes.position.needsUpdate = true;
-    particles.rotation.y += 0.002;
-    material.color.lerp(targetParticleColor, 0.05);
+
+    // 4. 照片回忆录逻辑
+    if (isSequenceActive) {
+        const now = Date.now();
+        const elapsed = now - sequenceStartTime;
+
+        if (elapsed < 2000) {
+            const progress = elapsed / 2000;
+            const easeOut = 1 - Math.pow(1 - progress, 3);
+            if(mainPhotoMesh) {
+                mainPhotoMesh.position.z = -800 + (800 * easeOut); 
+                mainPhotoMesh.material.opacity = progress;
+            }
+        } 
+        else if (elapsed < 2000 + MAIN_PHOTO_STAY_TIME) {
+            if(mainPhotoMesh) {
+                mainPhotoMesh.position.z = 0;
+                mainPhotoMesh.material.opacity = 1;
+            }
+        }
+        else {
+            if(mainPhotoMesh && mainPhotoMesh.material.opacity > 0) {
+                mainPhotoMesh.material.opacity -= 0.02;
+                mainPhotoMesh.position.z += 2; 
+            }
+
+            if (memoryIndex < PHOTO_LIST.length) {
+                if (now - lastSpawnTime > MEMORY_SPAWN_INTERVAL) {
+                    spawnMemoryPhoto(PHOTO_LIST[memoryIndex]);
+                    memoryIndex++;
+                    lastSpawnTime = now;
+                }
+            } else if (memoryGroup.children.length === 0) {
+                switchState('HEART');
+            }
+
+            for (let i = memoryGroup.children.length - 1; i >= 0; i--) {
+                const mesh = memoryGroup.children[i];
+                mesh.position.z += mesh.userData.speed;
+                if (mesh.position.z < -200) {
+                    mesh.material.opacity = Math.min(mesh.material.opacity + 0.02, 1);
+                } else if (mesh.position.z > 150) {
+                    mesh.material.opacity -= 0.05;
+                }
+                if (mesh.position.z > 300) {
+                    memoryGroup.remove(mesh);
+                }
+            }
+        }
+    }
 }
 
 function animate() {
     requestAnimationFrame(animate);
-    updateParticles();
+    update();
     renderer.render(scene, camera);
 }
 
-// --- 5. MediaPipe 手势识别 ---
+// --- 6. 手势识别 ---
 
 function getGesture(landmarks) {
-    const isThumbOpen = landmarks[4].x < landmarks[3].x; 
-    const isIndexOpen = landmarks[8].y < landmarks[6].y;
-    const isMiddleOpen = landmarks[12].y < landmarks[10].y;
-    const isRingOpen = landmarks[16].y < landmarks[14].y;
-    const isPinkyOpen = landmarks[20].y < landmarks[18].y;
-    
-    if (!isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen) return 'CLENCHED_FIST';
-    if (isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen) return 'OPEN_PALM';
-    if (isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen) return 'NUMBER_1';
-    if (isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen) return 'NUMBER_2';
-    if (isIndexOpen && isMiddleOpen && isRingOpen && !isPinkyOpen) return 'NUMBER_3';
-    
+    const thumbOpen = landmarks[4].x < landmarks[3].x;
+    const indexOpen = landmarks[8].y < landmarks[6].y;
+    const middleOpen = landmarks[12].y < landmarks[10].y;
+    const ringOpen = landmarks[16].y < landmarks[14].y;
+    const pinkyOpen = landmarks[20].y < landmarks[18].y;
+
+    if (!indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return 'FIST';
+    if (indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return 'ONE';
+    if (indexOpen && middleOpen && !ringOpen && !pinkyOpen) return 'TWO';
+    if (indexOpen && middleOpen && ringOpen && !pinkyOpen) return 'THREE';
+    if (indexOpen && middleOpen && thumbOpen && !ringOpen && !pinkyOpen) return 'THREE'; 
+    if (indexOpen && middleOpen && ringOpen && pinkyOpen) return 'OPEN';
     return 'UNKNOWN';
 }
 
 function onResults(results) {
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        handDetected = true;
-        handLandmarks = results.multiHandLandmarks[0];
-        
-        const currentGesture = getGesture(handLandmarks);
-        
-        // 调试信息
-        if(debugDiv) debugDiv.innerHTML = `状态: ${appState}\n手势: ${currentGesture}\n握拳数: ${fistCount}`;
+    // 锁定状态下不检测手势
+    if (appState === 'PHOTO_SEQUENCE' || appState === 'FIREWORKS_SEQUENCE') return;
 
-        switch (currentGesture) {
-            case 'CLENCHED_FIST':
-                if (appState !== 'PHOTO_SEQUENCE') {
-                    // 简单的防抖动逻辑：连续检测才算（实际可优化）
-                    if (appState !== 'SPHERE') {
-                        fistCount++;
-                        if (fistCount > 50) { // 持续握拳一段时间触发照片
-                            changeState('PHOTO_SEQUENCE');
-                            fistCount = 0;
-                        } else {
-                            changeState('SPHERE');
-                        }
-                    }
-                }
-                break;
-            case 'OPEN_PALM':
-                if (appState !== 'PHOTO_SEQUENCE') {
-                    changeState('HEART');
-                    fistCount = 0;
-                }
-                break;
-            case 'NUMBER_1': changeState('NUMBER_1'); fistCount=0; break;
-            case 'NUMBER_2': changeState('NUMBER_2'); fistCount=0; break;
-            case 'NUMBER_3': changeState('NUMBER_3'); fistCount=0; break;
+    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        if(debugDiv) debugDiv.innerText = "未检测到手部";
+        fistHoldCount = 0;
+        return;
+    }
+
+    // --- 双手检测逻辑 ---
+    if (results.multiHandLandmarks.length === 2) {
+        const hand1 = getGesture(results.multiHandLandmarks[0]);
+        const hand2 = getGesture(results.multiHandLandmarks[1]);
+        
+        if(debugDiv) debugDiv.innerText = `双手: ${hand1} + ${hand2}`;
+
+        // 如果两只手都是张开的 (OPEN)
+        if (hand1 === 'OPEN' && hand2 === 'OPEN') {
+            switchState('FIREWORKS_SEQUENCE');
+            return; // 触发后直接返回
+        }
+    }
+
+    // --- 单手逻辑 ---
+    const landmarks = results.multiHandLandmarks[0];
+    const gesture = getGesture(landmarks);
+    
+    if(debugDiv && results.multiHandLandmarks.length === 1) debugDiv.innerText = `单手: ${gesture}\n握拳: ${fistHoldCount}`;
+
+    if (gesture === 'FIST') {
+        fistHoldCount++;
+        if (fistHoldCount < 5) {
+            if (appState !== 'SPHERE') switchState('SPHERE');
+        } else if (fistHoldCount > FIST_TRIGGER_THRESHOLD) {
+            switchState('PHOTO_SEQUENCE');
+            fistHoldCount = 0;
         }
     } else {
-        handDetected = false;
-        if(debugDiv) debugDiv.innerHTML = `未检测到手部\n请将手移入画面`;
+        fistHoldCount = 0;
+        switch (gesture) {
+            case 'OPEN':  switchState('HEART'); break;
+            case 'ONE':   switchState('NUMBER_1'); break;
+            case 'TWO':   switchState('NUMBER_2'); break;
+            case 'THREE': switchState('NUMBER_3'); break;
+        }
     }
 }
 
-// --- 6. 启动逻辑 ---
+// --- 7. 启动 ---
 
-// 启动 Three.js
-initThreeJS();
+initThree();
 
-// 启动 MediaPipe
 videoElement = document.getElementById('webcam-video');
+const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 
-if (typeof Hands === 'undefined') {
-    console.error("MediaPipe Hands 库未加载，请检查网络或 CDN");
-    if(debugDiv) debugDiv.innerText = "错误：无法加载 AI 库";
-} else {
-    const hands = new Hands({
-        locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }
-    });
+hands.setOptions({
+    maxNumHands: 2, // 关键修改：允许检测两只手
+    modelComplexity: 1,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.5
+});
+hands.onResults(onResults);
 
-    hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-    });
-
-    hands.onResults(onResults);
-
-    // 启动摄像头
-    if (typeof Camera === 'undefined') {
-        console.error("MediaPipe Camera 库未加载");
-    } else {
-        const cameraUtil = new Camera(videoElement, {
-            onFrame: async () => {
-                if (videoElement.readyState >= 2) {
-                    await hands.send({ image: videoElement });
-                }
-            },
-            width: 640,
-            height: 480,
-            facingMode: 'user' // 尝试前置摄像头
-        });
-
-        cameraUtil.start()
-            .then(() => {
-                console.log("摄像头启动成功");
-                if(debugDiv) debugDiv.innerText = "摄像头已启动\n正在加载模型...";
-            })
-            .catch(err => {
-                console.error("摄像头启动失败", err);
-                if(debugDiv) debugDiv.innerText = "错误: " + err.message;
-                alert("无法启动摄像头，请确保已允许权限且设备未被占用。");
-            });
-    }
-}
+const cameraUtil = new Camera(videoElement, {
+    onFrame: async () => {
+        if(videoElement.readyState >= 2) await hands.send({ image: videoElement });
+    },
+    width: 640,
+    height: 480,
+    facingMode: 'user'
+});
+cameraUtil.start();

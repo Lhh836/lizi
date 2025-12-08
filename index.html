@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>实时交互 3D 粒子系统</title>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         /* 确保页面占满视口，无滚动条 */
@@ -10,6 +11,12 @@
             overflow: hidden; 
             background-color: #000; 
             font-family: sans-serif;
+        }
+        #container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #webcam-video { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; } /* 隐藏摄像头原画 */
+        #mobile-debug {
+            position: absolute; top: 10px; left: 10px; color: #0f0; z-index: 10;
+            font-family: monospace; font-size: 14px; pointer-events: none;
         }
         canvas { 
             display: block; 
@@ -23,8 +30,17 @@
             z-index: 1000 !important;
         }
     </style>
+    <!-- 引入 Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- 引入 MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 </head>
 <body>
+    <div id="mobile-debug">初始化中...</div>
+    <video id="webcam-video" playsinline></video>
     <!-- 3D 渲染容器 -->
     <div id="container"></div>
 
