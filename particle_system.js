@@ -46,6 +46,9 @@ let appState = 'INITIAL';
 let targetPositions = [];
 let targetColor = COLORS.SPHERE;
 
+// --- 新增 ---
+let fireworksVideoElement; // 获取烟花视频元素
+
 // 照片系统变量
 let mainPhotoMesh;
 let memoryGroup = new THREE.Group();
@@ -322,14 +325,21 @@ function switchState(newState) {
     // 避免重复触发相同状态 (除了照片和烟花序列)
     if (appState === newState && newState !== 'PHOTO_SEQUENCE' && newState !== 'FIREWORKS_SEQUENCE') return;
 
-    appState = newState;
-    if(debugDiv) debugDiv.innerText = `状态: ${newState}`;
-
-    // 离开烟花状态时，关闭烟花
-    if (newState !== 'FIREWORKS_SEQUENCE' && fireworksSystem) {
-        fireworksSystem.stop();
+    // --- 修改/新增 ---
+    // 离开烟花状态时，关闭烟花系统和背景视频
+    if (appState === 'FIREWORKS_SEQUENCE' && newState !== 'FIREWORKS_SEQUENCE') {
+        if (fireworksSystem) {
+            fireworksSystem.stop();
+        }
+        if (fireworksVideoElement) {
+            fireworksVideoElement.style.display = 'none';
+            fireworksVideoElement.pause();
+        }
         isFireworksActive = false;
     }
+
+    appState = newState;
+    if(debugDiv) debugDiv.innerText = `状态: ${newState}`;
 
     switch(newState) {
         case 'SPHERE':
@@ -408,6 +418,14 @@ function startFireworksSequence() {
     // 启动烟花系统
     fireworksSystem.start();
     
+    // --- 修改/新增 ---
+    // 播放背景视频
+    if (fireworksVideoElement) {
+        fireworksVideoElement.style.display = 'block';
+        fireworksVideoElement.currentTime = 0; // 从头播放
+        fireworksVideoElement.play();
+    }
+    
     // 设置第一句文案
     targetPositions = generateTextPositions(TEXT_PHRASES[0]);
     targetColor = COLORS.TEXT;
@@ -423,6 +441,8 @@ function initThree() {
     camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 2000);
     camera.position.z = 120;
 
+    // --- 修改/新增 ---
+    // 注意：这里的alpha: true是关键，它让canvas背景透明，从而能看到后面的HTML视频
     renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
@@ -660,6 +680,9 @@ function onResults(results) {
 initThree();
 
 videoElement = document.getElementById('webcam-video');
+// --- 新增 ---
+fireworksVideoElement = document.getElementById('fireworks-video');
+
 const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
 
 hands.setOptions({
