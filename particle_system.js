@@ -619,7 +619,19 @@ initThree();
 videoElement = document.getElementById('webcam-video');
 fireworksVideoElement = document.getElementById('fireworks-video');
 
-const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@medipe/hands/${file}` });
+
+// =================================================================
+// --- 8. 全新的启动流程 (手动控制摄像头，绕过 camera_utils) ---
+// =================================================================
+
+// 重新获取 video 元素，确保万无一失
+videoElement = document.getElementById('webcam-video');
+fireworksVideoElement = document.getElementById('fireworks-video');
+
+// 初始化 MediaPipe Hands
+const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@medipe/hands/${file}`
+});
 
 hands.setOptions({
     maxNumHands: 2,
@@ -627,36 +639,63 @@ hands.setOptions({
     minDetectionConfidence: 0.6,
     minTrackingConfidence: 0.5
 });
+
+// 设置结果回调函数
 hands.onResults(onResults);
 
-// --- 修改/新增 ---: 添加错误处理，优雅地跳过摄像头启动失败
-const cameraUtil = new Camera(videoElement, {
-    onFrame: async () => {
-        // 只有在摄像头成功启动后才发送数据
-        if(videoElement.readyState >= 2) {
-            await hands.send({ image: videoElement });
-        }
-    },
-    width: 640,
-    height: 480,
-    facingMode: 'user'
-});
+// 定义一个函数来启动摄像头和处理流程
+async function startCamera() {
+    try {
+        // 1. 使用浏览器原生 API 请求摄像头视频流
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { ideal: 640 },
+                height: { ideal: 480 },
+                facingMode: 'user' // 优先使用前置摄像头
+            }
+        });
 
-// 使用 try...catch 来启动摄像头
-try {
-    cameraUtil.start();
-    console.log("摄像头启动成功！");
-    if(debugDiv) debugDiv.innerText = "摄像头已启动，请做出手势。";
-} catch (error) {
-    console.error("摄像头启动失败:", error);
-    // 在界面上显示提示信息
-    if(debugDiv) {
-        debugDiv.style.color = "#ffcc00"; // 改为黄色警告
-        debugDiv.innerText = "警告：未找到摄像头或权限被拒绝。\n手势识别功能已禁用。\n你可以手动触发动画。";
+        // 2. 将视频流赋值给 video 元素
+        videoElement.srcObject = stream;
+
+        // 3. 添加一个监听器，确保在视频可以播放后才开始处理
+        videoElement.addEventListener('loadeddata', () => {
+            console.log("摄像头视频已加载，准备开始处理手势。");
+            if(debugDiv) debugDiv.innerText = "摄像头已启动，请做出手势。";
+
+            // 4. 开始播放视频 (虽然视频是隐藏的，但必须播放才能获取数据)
+            videoElement.play();
+
+            // 5. 启动一个循环，持续将视频帧发送给 MediaPipe
+            sendToMediaPipe();
+        });
+
+    } catch (error) {
+        console.error("启动摄像头失败:", error);
+        if (debugDiv) {
+            debugDiv.style.color = "#ffcc00";
+            debugDiv.innerText = `错误: 摄像头启动失败。\n原因: ${error.name}\n请检查设备和浏览器权限。`;
+        }
+        // 可以在这里启用备用的键盘控制
+        enableKeyboardControls();
     }
-    
-    // 在这里可以添加键盘控制或其他备用交互方式
-    // 例如，按下键盘数字键 1, 2, 3, h, p, f 来切换状态
+}
+
+// 定义将视频帧发送给 MediaPipe 的函数
+async function sendToMediaPipe() {
+    // 检查 video 元素是否已准备好，避免在视频暂停或结束时报错
+    if (videoElement.readyState >= 2) {
+        await hands.send({ image: videoElement });
+    }
+    // 使用 requestAnimationFrame 实现高效循环
+    requestAnimationFrame(sendToMediaPipe);
+}
+
+// 定义备用的键盘控制函数
+function enableKeyboardControls() {
+    if (debugDiv) {
+        debugDiv.innerText += "\n\n已启用键盘控制:\n[1,2,3] 数字\n[h] 爱心\n[s] 球体\n[p] 照片\n[f] 烟花";
+    }
     window.addEventListener('keydown', (event) => {
         switch(event.key) {
             case '1': switchState('NUMBER_1'); break;
@@ -668,7 +707,7 @@ try {
             case 'f': switchState('FIREWORKS_SEQUENCE'); break;
         }
     });
-    if(debugDiv) {
-        debugDiv.innerText += "\n\n已启用键盘控制:\n[1,2,3] 数字\n[h] 爱心\n[s] 球体\n[p] 照片\n[f] 烟花";
-    }
 }
+
+// --- 最终启动 ---
+startCamera();
