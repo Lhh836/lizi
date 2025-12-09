@@ -612,12 +612,7 @@ function onResults(results) {
     }
 }
 
-// --- 7. 启动 ---
 
-initThree();
-
-videoElement = document.getElementById('webcam-video');
-fireworksVideoElement = document.getElementById('fireworks-video');
 
 
 // =================================================================
@@ -709,5 +704,44 @@ function enableKeyboardControls() {
     });
 }
 
-// --- 最终启动 ---
-startCamera();
+// =================================================================
+// --- 9. 全新的、兼容移动端的启动流程 ---
+// =================================================================
+
+// 定义一个统一的启动函数
+function startExperience() {
+    // 隐藏启动按钮
+    const overlay = document.getElementById('start-overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+    }
+
+    // 启动 Three.js 场景
+    initThree();
+
+    // 启动摄像头和手势识别
+    startCamera();
+}
+
+// 获取启动按钮并添加点击事件监听器
+const startButton = document.getElementById('start-button');
+if (startButton) {
+    startButton.addEventListener('click', () => {
+        console.log("用户点击启动，开始体验...");
+        startExperience();
+    });
+} else {
+    // 如果没有找到按钮（例如在某些测试环境中），则直接启动
+    console.warn("未找到启动按钮，直接尝试启动。这在移动端可能失败。");
+    startExperience();
+}
+// --- 7. 启动 ---
+
+initThree();
+
+videoElement = document.getElementById('webcam-video');
+fireworksVideoElement = document.getElementById('fireworks-video');
+
+
+// --- 你的其他JS代码（从 initThree() 到 startCamera() 等）保持不变 ---
+// 注意：需要把 initThree() 的调用从文件顶部移到上面的 startExperience 函数中

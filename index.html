@@ -35,10 +35,38 @@
         canvas { 
             display: block; 
         }
+        #start-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+    color: white;
+    font-family: sans-serif;
+}
+
+#start-button {
+    padding: 15px 30px;
+    font-size: 20px;
+    cursor: pointer;
+    border: 2px solid white;
+    background-color: transparent;
+    color: white;
+    border-radius: 8px;
+}
     </style>
 </head>
 <body>
 
+    <!-- 新增：启动覆盖层 -->
+    <div id="start-overlay">
+        <button id="start-button">开始体验</button>
+    </div>
     <!-- 1. 3D 渲染容器 -->
     <div id="container"></div>
 
@@ -46,17 +74,18 @@
     <div id="mobile-debug">初始化中...</div>
 
     <!-- 3. 摄像头视频流 (隐藏，仅供JS使用) -->
-    <video id="webcam-video" playsinline style="display: none;"></video>
-
+    <video id="webcam-video" style="display: none;"></video>
+    <video id="firework-texture-video" loop muted playsinline src="firework_texture.mp4" style="display: none;"></video>
+    
     <!-- 
       4. 背景烟花视频 (如果需要的话，放在这里)
       例如: <video id="fireworks-video" loop muted playsinline autoplay src="disney.mp4" style="..."></video> 
     -->
-
     <!-- 
       5. 新增：用于烟花纹理的视频素材 (这就是你要添加的代码)
       它是一个隐藏的素材，放在 body 内的任何地方都可以，这里是推荐位置。
     -->
+    
     <video id="firework-texture-video" loop muted playsinline style="display: none;">
         <!-- 请将 'firework_alpha.webm' 替换为你自己的透明烟花视频文件 -->
         <source src="firework_alpha.webm" type="video/webm">
