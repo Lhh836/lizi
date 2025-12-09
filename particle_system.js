@@ -629,12 +629,46 @@ hands.setOptions({
 });
 hands.onResults(onResults);
 
+// --- 修改/新增 ---: 添加错误处理，优雅地跳过摄像头启动失败
 const cameraUtil = new Camera(videoElement, {
     onFrame: async () => {
-        if(videoElement.readyState >= 2) await hands.send({ image: videoElement });
+        // 只有在摄像头成功启动后才发送数据
+        if(videoElement.readyState >= 2) {
+            await hands.send({ image: videoElement });
+        }
     },
     width: 640,
     height: 480,
     facingMode: 'user'
 });
-cameraUtil.start();
+
+// 使用 try...catch 来启动摄像头
+try {
+    cameraUtil.start();
+    console.log("摄像头启动成功！");
+    if(debugDiv) debugDiv.innerText = "摄像头已启动，请做出手势。";
+} catch (error) {
+    console.error("摄像头启动失败:", error);
+    // 在界面上显示提示信息
+    if(debugDiv) {
+        debugDiv.style.color = "#ffcc00"; // 改为黄色警告
+        debugDiv.innerText = "警告：未找到摄像头或权限被拒绝。\n手势识别功能已禁用。\n你可以手动触发动画。";
+    }
+    
+    // 在这里可以添加键盘控制或其他备用交互方式
+    // 例如，按下键盘数字键 1, 2, 3, h, p, f 来切换状态
+    window.addEventListener('keydown', (event) => {
+        switch(event.key) {
+            case '1': switchState('NUMBER_1'); break;
+            case '2': switchState('NUMBER_2'); break;
+            case '3': switchState('NUMBER_3'); break;
+            case 'h': switchState('HEART'); break;
+            case 's': switchState('SPHERE'); break;
+            case 'p': switchState('PHOTO_SEQUENCE'); break;
+            case 'f': switchState('FIREWORKS_SEQUENCE'); break;
+        }
+    });
+    if(debugDiv) {
+        debugDiv.innerText += "\n\n已启用键盘控制:\n[1,2,3] 数字\n[h] 爱心\n[s] 球体\n[p] 照片\n[f] 烟花";
+    }
+}
