@@ -5,101 +5,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+        /* 确保页面占满视口，无滚动条 */
         body { 
             margin: 0; 
             overflow: hidden; 
             background-color: #000; 
             font-family: sans-serif;
         }
-        #container { 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            z-index: 1; 
-        }
+        #container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #webcam-video { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; } /* 隐藏摄像头原画 */
         #mobile-debug {
-            position: absolute; 
-            top: 10px; 
-            left: 10px; 
-            color: #0f0; 
-            z-index: 10;
-            font-family: monospace; 
-            font-size: 14px; 
-            pointer-events: none;
-            background: rgba(0,0,0,0.6); 
-            padding: 5px;
-            white-space: pre-wrap;
+            position: absolute; top: 10px; left: 10px; color: #0f0; z-index: 10;
+            font-family: monospace; font-size: 14px; pointer-events: none;
         }
         canvas { 
             display: block; 
         }
-        #start-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.8);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 100;
-    color: white;
-    font-family: sans-serif;
-}
-
-#start-button {
-    padding: 15px 30px;
-    font-size: 20px;
-    cursor: pointer;
-    border: 2px solid white;
-    background-color: transparent;
-    color: white;
-    border-radius: 8px;
-}
+        /* 隐藏调试容器：确保摄像头画面和骨架不显示 */
+        #debug-container {
+            display: none; /* 关键修改：完全隐藏 */
+        }
+        /* 隐藏 dat.GUI 默认的 z-index，确保它在最上层 */
+        .dg.main {
+            z-index: 1000 !important;
+        }
     </style>
-</head>
-<body>
-
-    <!-- 新增：启动覆盖层 -->
-    <div id="start-overlay">
-        <button id="start-button">开始体验</button>
-    </div>
-    <!-- 1. 3D 渲染容器 -->
-    <div id="container"></div>
-
-    <!-- 2. 调试信息框 -->
-    <div id="mobile-debug">初始化中...</div>
-
-    <!-- 3. 摄像头视频流 (隐藏，仅供JS使用) -->
-    <video id="webcam-video" style="display: none;"></video>
-    <video id="firework-texture-video" loop muted playsinline src="firework_texture.mp4" style="display: none;"></video>
-    
-    <!-- 
-      4. 背景烟花视频 (如果需要的话，放在这里)
-      例如: <video id="fireworks-video" loop muted playsinline autoplay src="disney.mp4" style="..."></video> 
-    -->
-    <!-- 
-      5. 新增：用于烟花纹理的视频素材 (这就是你要添加的代码)
-      它是一个隐藏的素材，放在 body 内的任何地方都可以，这里是推荐位置。
-    -->
-    
-    <video id="firework-texture-video" loop muted playsinline style="display: none;">
-        <!-- 请将 'firework_alpha.webm' 替换为你自己的透明烟花视频文件 -->
-        <source src="firework_alpha.webm" type="video/webm">
-    </video>
-
-    <!-- 6. 引入所有必要的库 (只引入一次) -->
+    <!-- 引入 Three.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- 引入 MediaPipe Hands -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    
-    <!-- 7. 核心逻辑脚本 -->
-    <script src="particle_system.js"></script>
+</head>
+<body>
+    <div id="mobile-debug">初始化中...</div>
+    <video id="webcam-video" playsinline></video>
+    <!-- 3D 渲染容器 -->
+    <div id="container"></div>
 
+    <!-- 调试容器 (现在被隐藏) -->
+    <div id="debug-container">
+        <!-- 摄像头视频流 (display:none 保持不变) -->
+        <video id="webcam-video" style="display:none;"></video>
+        <!-- 绘制手部骨架的 Canvas (现在通过CSS隐藏) -->
+        <canvas id="output-canvas" width="640" height="480"></canvas>
+    </div>
+
+    <!-- 引入必要的库 (使用CDN) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+    <!-- 核心逻辑脚本 -->
+    <script src="particle_system.js"></script>
+</body><body>
+    <!-- 1. 调试信息框 (手机端查看关键信息) -->
+    <div id="mobile-debug" style="
+        position: absolute; 
+        top: 10px; 
+        left: 10px; 
+        color: #00ff00; 
+        font-size: 12px; 
+        z-index: 9999; 
+        background: rgba(0,0,0,0.6); 
+        padding: 5px;
+        pointer-events: none;
+        font-family: monospace;
+        white-space: pre-wrap;">
+        正在初始化...
+    </div>
+
+    <!-- 2. 3D 渲染容器 -->
+    <div id="container"></div>
+
+    <!-- 3. 摄像头视频流 (关键修改) -->
+    <!-- 注意：不要用 display:none，改用 opacity:0 且定位到屏幕外 -->
+    <!-- 必须添加 playsinline 属性，否则手机上无法自动播放 -->
+    <video id="webcam-video" 
+           style="position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; z-index: -1;" 
+           playsinline 
+           webkit-playsinline 
+           muted 
+           autoplay>
+    </video>
+
+    <!-- 4. 引入库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script> 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+    <!-- 5. 核心逻辑 -->
+    <script src="particle_system.js"></script>
 </body>
 </html>
