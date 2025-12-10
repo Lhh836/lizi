@@ -1,9 +1,10 @@
 // =================================================================
 // 粒子交互系统 - 完整版 (回忆录 + 烟花文字祝福)
+// 修改版：行星开场 + 爆炸转场
 // =================================================================
 
 // --- 1. 全局配置 ---
-const NUM_PARTICLES = 6000;
+const NUM_PARTICLES = 8000; // 增加粒子数量以获得更好的视觉效果
 const LERP_SPEED = 0.08;
 
 // --- 照片配置 ---
@@ -36,17 +37,20 @@ const COLORS = {
     NUM_2:  new THREE.Color(0xffff00),
     NUM_3:  new THREE.Color(0xff0000),
     STAR:   new THREE.Color(0xffffff),
-    TEXT:   new THREE.Color(0xffd700) // 金色文字
+    TEXT:   new THREE.Color(0xffd700), // 金色文字
+    // <-- 新增：行星和星环的颜色 -->
+    PLANET: new THREE.Color(0x4a90e2), // 行星蓝色
+    RING:   new THREE.Color(0xf5a623)  // 星环金色
 };
 
 // 核心变量
 let scene, camera, renderer, particles, geometry, material;
 let videoElement;
+let fireworkVideo; 
 let appState = 'INITIAL';
 let targetPositions = [];
-let targetColor = COLORS.SPHERE;
-
-let fireworksVideoElement; 
+let targetColor = COLORS.SPHERE; 
+let useVertexColors = true; // 控制是否使用顶点颜色的标志
 
 // 照片系统变量
 let mainPhotoMesh;
@@ -60,18 +64,89 @@ let isSequenceActive = false;
 let memoryIndex = 0;
 let lastSpawnTime = 0;
 
+// <-- 新增：爆炸效果变量 -->
+let isExploding = false;
+let explosionStartTime = 0;
+const EXPLOSION_DURATION = 1500; // 爆炸持续时间 (毫秒)
+let particleVelocities = new Float32Array(NUM_PARTICLES * 3);
+
 // 烟花与文字变量
 let isFireworksActive = false;
 let textSequenceIndex = 0;
 let lastTextChangeTime = 0;
-let fireworksSystem; // 烟花系统实例
+let fireworksSystem; 
 
 // 手势变量
 let fistHoldCount = 0;
 const FIST_TRIGGER_THRESHOLD = 40;
 const debugDiv = document.getElementById('mobile-debug');
 
-// --- 2. 形状生成算法 (无变化) ---
+// --- 2. 形状生成算法 ---
+
+// <-- 新增：生成行星、星环和星空的函数 -->
+function generatePlanetAndStars() {
+    const pos = [];
+    const colors = [];
+    
+    const planetRadius = 30;
+    const ringInnerRadius = 45;
+    const ringOuterRadius = 70;
+    const ringTilt = -0.4; // 弧度
+    const starfieldRadius = 400;
+
+    const numPlanet = Math.floor(NUM_PARTICLES * 0.4);
+    const numRing = Math.floor(NUM_PARTICLES * 0.3);
+    const numStars = NUM_PARTICLES - numPlanet - numRing;
+
+    // 1. 生成行星 (球体)
+    for(let i=0; i<numPlanet; i++){
+        const radius = planetRadius * Math.cbrt(Math.random());
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        pos.push(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.sin(phi) * Math.sin(theta),
+            radius * Math.cos(phi)
+        );
+        colors.push(COLORS.PLANET.r, COLORS.PLANET.g, COLORS.PLANET.b);
+    }
+
+    // 2. 生成星环
+    for(let i=0; i<numRing; i++){
+        const radius = ringInnerRadius + Math.random() * (ringOuterRadius - ringInnerRadius);
+        const theta = Math.random() * 2 * Math.PI;
+        const x = radius * Math.cos(theta);
+        const y = 0;
+        const z = radius * Math.sin(theta);
+        
+        // 应用倾斜
+        const tiltedY = y * Math.cos(ringTilt) - z * Math.sin(ringTilt);
+        const tiltedZ = y * Math.sin(ringTilt) + z * Math.cos(ringTilt);
+
+        pos.push(x, tiltedY, tiltedZ);
+        colors.push(COLORS.RING.r, COLORS.RING.g, COLORS.RING.b);
+    }
+
+    // 3. 生成背景星空
+    for(let i=0; i<numStars; i++){
+        const radius = starfieldRadius * Math.cbrt(Math.random());
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        pos.push(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.sin(phi) * Math.sin(theta),
+            radius * Math.cos(phi)
+        );
+        const starColor = new THREE.Color(0xffffff).lerp(COLORS.RING, Math.random() * 0.3);
+        colors.push(starColor.r, starColor.g, starColor.b);
+    }
+
+    return {
+        positions: new Float32Array(pos),
+        colors: new Float32Array(colors)
+    };
+}
+
 
 function generateSphere(r) {
     const pos = [];
@@ -180,123 +255,195 @@ function generateTextPositions(text) {
 }
 
 // --- 3. 烟花系统 ---
-// --- 修改/新增 ---: 使用全新的、基于视频纹理的真实烟花系统
-class RealFireworksSystem {
+
+class FireworksSystem {
     constructor(scene) {
         this.scene = scene;
-        this.fireworks = []; // 存放所有烟花平面
-        this.videoElement = document.getElementById('firework-texture-video');
-        this.videoTexture = new THREE.VideoTexture(this.videoElement);
-        
-        this.geometry = new THREE.PlaneGeometry(80, 80); // 烟花的大小
-        this.material = new THREE.MeshBasicMaterial({
-            map: this.videoTexture,
+        this.fireworks = [];
+        this.geometry = new THREE.BufferGeometry();
+        this.material = new THREE.PointsMaterial({
+            size: 3,
+            vertexColors: true,
             transparent: true,
-            blending: THREE.AdditiveBlending, // 混合模式让烟花更亮
+            opacity: 1,
+            blending: THREE.AdditiveBlending,
             depthWrite: false
         });
-        
-        this.pool = []; // 对象池，用于复用烟花平面
-        this.isReady = false;
-        this.isVisible = false;
-
-        // 确保视频可以播放
-        this.videoElement.addEventListener('canplay', () => {
-            this.isReady = true;
-        });
+        this.maxParticles = 3000;
+        this.positions = new Float32Array(this.maxParticles * 3);
+        this.colors = new Float32Array(this.maxParticles * 3);
+        this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+        this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+        this.mesh = new THREE.Points(this.geometry, this.material);
+        this.mesh.visible = false;
+        this.scene.add(this.mesh);
+        this.particlesData = [];
+        for(let i=0; i<this.maxParticles; i++) {
+            this.particlesData.push({
+                vx: 0, vy: 0, vz: 0,
+                life: 0,
+                active: false
+            });
+        }
     }
-
-    start() {
-        if (!this.isReady) return;
-        this.isVisible = true;
-        this.videoElement.play();
-    }
-
+    start() { this.mesh.visible = true; }
     stop() {
-        this.isVisible = false;
-        this.videoElement.pause();
-        // 隐藏所有烟花
-        this.fireworks.forEach(fw => {
-            fw.visible = false;
-        });
+        this.mesh.visible = false;
+        for(let i=0; i<this.maxParticles; i++) {
+            this.particlesData[i].active = false;
+            this.positions[i*3+1] = -1000;
+        }
     }
-
-    // 发射一个烟花
     launch() {
-        let fireworkMesh;
-        // 从对象池中取
-        if (this.pool.length > 0) {
-            fireworkMesh = this.pool.pop();
-        } else { // 池中没有，则新建一个
-            fireworkMesh = new THREE.Mesh(this.geometry, this.material);
-            this.fireworks.push(fireworkMesh);
-            this.scene.add(fireworkMesh);
+        const centerX = (Math.random() - 0.5) * 200;
+        const centerY = (Math.random() - 0.5) * 100 + 20;
+        const color = new THREE.Color().setHSL(Math.random(), 1, 0.6);
+        let count = 0;
+        for(let i=0; i<this.maxParticles; i++) {
+            if(!this.particlesData[i].active) {
+                this.particlesData[i].active = true;
+                this.particlesData[i].life = 1.0;
+                this.positions[i*3] = centerX;
+                this.positions[i*3+1] = centerY;
+                this.positions[i*3+2] = -100;
+                const speed = 1 + Math.random() * 2;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.random() * Math.PI;
+                this.particlesData[i].vx = speed * Math.sin(phi) * Math.cos(theta);
+                this.particlesData[i].vy = speed * Math.sin(phi) * Math.sin(theta);
+                this.particlesData[i].vz = speed * Math.cos(phi);
+                this.colors[i*3] = color.r;
+                this.colors[i*3+1] = color.g;
+                this.colors[i*3+2] = color.b;
+                count++;
+                if(count >= 100) break;
+            }
         }
-        
-        fireworkMesh.visible = true;
-        // 随机位置
-        const x = (Math.random() - 0.5) * 250;
-        const y = (Math.random() - 0.5) * 150;
-        const z = -100 - Math.random() * 100; // 在文字后面
-        fireworkMesh.position.set(x, y, z);
-        fireworkMesh.scale.set(0.1, 0.1, 0.1); // 初始很小
-        
-        // 动画数据
-        fireworkMesh.userData.life = 0;
-        fireworkMesh.userData.duration = 1.5 + Math.random(); // 持续时间
     }
-
-    update(deltaTime) {
-        if (!this.isVisible) return;
-        
-        // 随机发射
-        if (Math.random() < 0.04) {
-            this.launch();
-        }
-
-        // 更新每个烟花的动画
-        for (let i = this.fireworks.length - 1; i >= 0; i--) {
-            const fw = this.fireworks[i];
-            if (fw.visible) {
-                fw.userData.life += deltaTime;
-                const progress = fw.userData.life / fw.userData.duration;
-
-                if (progress < 1) {
-                    // 放大并淡出效果
-                    const scale = Math.sin(progress * Math.PI); // 使用sin曲线模拟爆炸和消失
-                    fw.scale.set(scale, scale, scale);
-                    fw.material.opacity = scale;
-                } else {
-                    // 生命周期结束，隐藏并回收到对象池
-                    fw.visible = false;
-                    this.pool.push(fw);
+    update() {
+        if(!this.mesh.visible) return;
+        if(Math.random() < 0.05) this.launch();
+        for(let i=0; i<this.maxParticles; i++) {
+            if(this.particlesData[i].active) {
+                const p = this.particlesData[i];
+                this.positions[i*3] += p.vx;
+                this.positions[i*3+1] += p.vy;
+                this.positions[i*3+2] += p.vz;
+                p.vy -= 0.05;
+                p.vx *= 0.96;
+                p.vy *= 0.96;
+                p.vz *= 0.96;
+                p.life -= 0.015;
+                if(p.life <= 0) {
+                    p.active = false;
+                    this.positions[i*3+1] = -1000;
                 }
             }
         }
+        this.geometry.attributes.position.needsUpdate = true;
+        this.geometry.attributes.color.needsUpdate = true;
+    }
+}
+
+// --- 4. 状态与资源管理 ---
+
+function initBackgroundVideo() {
+    fireworkVideo = document.createElement('video');
+    fireworkVideo.src = 'firework_texture.mp4'; 
+    fireworkVideo.loop = true;
+    fireworkVideo.muted = true; 
+    fireworkVideo.playsInline = true;
+    fireworkVideo.preload = 'auto';
+    
+    fireworkVideo.style.position = 'fixed';
+    fireworkVideo.style.top = '50%';
+    fireworkVideo.style.left = '50%';
+    fireworkVideo.style.minWidth = '100%';
+    fireworkVideo.style.minHeight = '100%';
+    fireworkVideo.style.width = 'auto';
+    fireworkVideo.style.height = 'auto';
+    fireworkVideo.style.transform = 'translate(-50%, -50%)';
+    fireworkVideo.style.zIndex = '-1'; 
+    fireworkVideo.style.opacity = '0'; 
+    fireworkVideo.style.transition = 'opacity 1.5s ease'; 
+    
+    document.body.appendChild(fireworkVideo);
+}
+
+// <-- 新增：触发爆炸效果的函数 -->
+function triggerExplosion() {
+    isExploding = true;
+    explosionStartTime = Date.now();
+    const currentPositions = geometry.attributes.position.array;
+    for (let i = 0; i < NUM_PARTICLES; i++) {
+        const i3 = i * 3;
+        const x = currentPositions[i3];
+        const y = currentPositions[i3+1];
+        const z = currentPositions[i3+2];
+        
+        // 计算从原点出发的方向向量并归一化
+        const vec = new THREE.Vector3(x, y, z).normalize();
+        
+        // 设置一个随机的爆炸速度
+        const speed = 5 + Math.random() * 10;
+        
+        particleVelocities[i3] = vec.x * speed;
+        particleVelocities[i3+1] = vec.y * speed;
+        particleVelocities[i3+2] = vec.z * speed;
     }
 }
 
 
-// --- 4. 状态与资源管理 ---
-
 function switchState(newState) {
     if (appState === newState && newState !== 'PHOTO_SEQUENCE' && newState !== 'FIREWORKS_SEQUENCE') return;
 
-    if (appState === 'FIREWORKS_SEQUENCE' && newState !== 'FIREWORKS_SEQUENCE') {
-        if (fireworksSystem) {
-            fireworksSystem.stop();
+    // <-- 新增：检查是否是从行星状态切换到照片序列，如果是则触发爆炸 -->
+    if (appState === 'PLANET' && newState === 'PHOTO_SEQUENCE') {
+        triggerExplosion();
+    } else {
+        isExploding = false; // 确保其他状态切换不会触发爆炸
+    }
+
+    if (newState === 'FIREWORKS_SEQUENCE') {
+        if (fireworkVideo) {
+            fireworkVideo.style.opacity = '1';
+            fireworkVideo.play().catch(e => console.error("视频自动播放失败:", e));
         }
-        if (fireworksVideoElement) {
-            fireworksVideoElement.style.display = 'none';
-            fireworksVideoElement.pause();
+    } else {
+        if (appState === 'FIREWORKS_SEQUENCE' && fireworkVideo) {
+            fireworkVideo.style.opacity = '0';
+            setTimeout(() => {
+                if (appState !== 'FIREWORKS_SEQUENCE') {
+                    fireworkVideo.pause();
+                    fireworkVideo.currentTime = 0;
+                }
+            }, 1500); 
         }
-        isFireworksActive = false;
     }
 
     appState = newState;
     if(debugDiv) debugDiv.innerText = `状态: ${newState}`;
 
+    if (newState !== 'FIREWORKS_SEQUENCE' && fireworksSystem) {
+        fireworksSystem.stop();
+        isFireworksActive = false;
+    }
+    
+    // 控制是否使用顶点颜色
+    // 只有行星状态使用顶点颜色，其他状态使用统一颜色
+    useVertexColors = (newState === 'PLANET');
+    material.vertexColors = useVertexColors;
+    material.needsUpdate = true;
+
     switch(newState) {
+        case 'PLANET':
+            const planetData = generatePlanetAndStars();
+            targetPositions = planetData.positions;
+            // 更新颜色属性
+            geometry.setAttribute('color', new THREE.BufferAttribute(planetData.colors, 3));
+            geometry.attributes.color.needsUpdate = true;
+            resetPhotoSequence();
+            break;
         case 'SPHERE':
             targetPositions = generateSphere(35);
             targetColor = COLORS.SPHERE;
@@ -344,7 +491,6 @@ function startPhotoSequence() {
     sequenceStartTime = Date.now();
     targetPositions = generateStarField();
     targetColor = COLORS.STAR;
-
     if(mainPhotoMesh) {
         mainPhotoMesh.visible = true;
         mainPhotoMesh.position.z = -800;
@@ -367,50 +513,46 @@ function startFireworksSequence() {
     isFireworksActive = true;
     textSequenceIndex = 0;
     lastTextChangeTime = Date.now();
-    
     fireworksSystem.start();
-    
-    if (fireworksVideoElement) {
-        fireworksVideoElement.style.display = 'block';
-        fireworksVideoElement.currentTime = 0;
-        fireworksVideoElement.play();
-    }
-    
     targetPositions = generateTextPositions(TEXT_PHRASES[0]);
     targetColor = COLORS.TEXT;
-    
     resetPhotoSequence();
 }
 
 // --- 5. Three.js 核心 ---
 
-const clock = new THREE.Clock(); // --- 新增 --- 用于获取 update 的时间差
-
 function initThree() {
     const container = document.getElementById('container');
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 2000);
-    camera.position.z = 120;
+    camera.position.z = 150; // 调整相机距离以更好地展示行星
 
     renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
+    initBackgroundVideo();
+
     geometry = new THREE.BufferGeometry();
-    const initialPos = generateSphere(35);
+    // <-- 修改：使用新的行星函数进行初始化 -->
+    const initialData = generatePlanetAndStars();
+    const initialPos = initialData.positions;
+    const initialColors = initialData.colors;
+
     geometry.setAttribute('position', new THREE.BufferAttribute(initialPos, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(initialColors, 3));
+
     material = new THREE.PointsMaterial({
-        color: COLORS.SPHERE,
         size: 1.2,
         transparent: true,
-        opacity: 0.8,
-        blending: THREE.AdditiveBlending
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        vertexColors: true // <-- 关键：启用顶点颜色
     });
     particles = new THREE.Points(geometry, material);
     scene.add(particles);
 
-    // --- 修改/新增 ---: 初始化新的烟花系统
-    fireworksSystem = new RealFireworksSystem(scene);
+    fireworksSystem = new FireworksSystem(scene);
 
     textureLoader.load('my_photo.jpg', (texture) => {
         const aspect = texture.image.width / texture.image.height;
@@ -426,6 +568,8 @@ function initThree() {
     preloadTextures();
 
     targetPositions = initialPos;
+    appState = 'PLANET'; // <-- 设置初始状态为行星
+
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
@@ -438,29 +582,42 @@ function initThree() {
 function spawnMemoryPhoto(filename) {
     const tex = loadedTextures[filename];
     if (!tex) return; 
-
     const aspect = tex.image.width / tex.image.height;
     const height = 100; 
     const width = height * aspect;
-
     const geo = new THREE.PlaneGeometry(width, height);
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0 });
     const mesh = new THREE.Mesh(geo, mat);
-
     const randomX = (Math.random() - 0.5) * 100; 
     const randomY = (Math.random() - 0.5) * 60;
-
     mesh.position.set(randomX, randomY, -1000); 
     mesh.userData = { speed: MEMORY_FLIGHT_SPEED + Math.random() * 2 }; 
-
     memoryGroup.add(mesh);
 }
 
 function update() {
-    const deltaTime = clock.getDelta(); // --- 新增 --- 获取帧间隔时间
     const positions = geometry.attributes.position.array;
 
-    if (targetPositions.length > 0) {
+    // <-- 修改：动画更新逻辑，加入爆炸效果处理 -->
+    if (isExploding) {
+        const elapsed = Date.now() - explosionStartTime;
+        if (elapsed < EXPLOSION_DURATION) {
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+                const i3 = i * 3;
+                positions[i3] += particleVelocities[i3];
+                positions[i3+1] += particleVelocities[i3+1];
+                positions[i3+2] += particleVelocities[i3+2];
+                
+                // 速度衰减
+                particleVelocities[i3] *= 0.96;
+                particleVelocities[i3+1] *= 0.96;
+                particleVelocities[i3+2] *= 0.96;
+            }
+        } else {
+            isExploding = false; // 爆炸结束，恢复正常插值动画
+        }
+        geometry.attributes.position.needsUpdate = true;
+    } else if (targetPositions.length > 0) {
         for(let i=0; i<NUM_PARTICLES; i++) {
             const i3 = i*3;
             positions[i3]   += (targetPositions[i3] - positions[i3]) * LERP_SPEED;
@@ -469,19 +626,19 @@ function update() {
         }
         geometry.attributes.position.needsUpdate = true;
     }
-
-    material.color.lerp(targetColor, 0.05);
+    
+    // 颜色过渡逻辑
+    if (!useVertexColors) {
+        material.color.lerp(targetColor, 0.05);
+    }
 
     if (appState === 'FIREWORKS_SEQUENCE' || appState === 'NUMBER_1' || appState === 'NUMBER_2' || appState === 'NUMBER_3') {
         particles.rotation.y += (0 - particles.rotation.y) * 0.05;
     } else {
         particles.rotation.y += 0.002;
     }
-
     if (isFireworksActive && fireworksSystem) {
-        // --- 修改/新增 ---: 更新烟花系统时传入deltaTime
-        fireworksSystem.update(deltaTime);
-        
+        fireworksSystem.update();
         if (Date.now() - lastTextChangeTime > TEXT_DISPLAY_DURATION) {
             textSequenceIndex++;
             if (textSequenceIndex < TEXT_PHRASES.length) {
@@ -492,11 +649,9 @@ function update() {
             }
         }
     }
-
     if (isSequenceActive) {
         const now = Date.now();
         const elapsed = now - sequenceStartTime;
-
         if (elapsed < 2000) {
             const progress = elapsed / 2000;
             const easeOut = 1 - Math.pow(1 - progress, 3);
@@ -516,7 +671,6 @@ function update() {
                 mainPhotoMesh.material.opacity -= 0.02;
                 mainPhotoMesh.position.z += 2; 
             }
-
             if (memoryIndex < PHOTO_LIST.length) {
                 if (now - lastSpawnTime > MEMORY_SPAWN_INTERVAL) {
                     spawnMemoryPhoto(PHOTO_LIST[memoryIndex]);
@@ -526,7 +680,6 @@ function update() {
             } else if (memoryGroup.children.length === 0) {
                 switchState('HEART');
             }
-
             for (let i = memoryGroup.children.length - 1; i >= 0; i--) {
                 const mesh = memoryGroup.children[i];
                 mesh.position.z += mesh.userData.speed;
@@ -549,7 +702,7 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// --- 6. 手势识别 (无变化) ---
+// --- 6. 手势识别 ---
 
 function getGesture(landmarks) {
     const thumbOpen = landmarks[4].x < landmarks[3].x;
@@ -557,7 +710,6 @@ function getGesture(landmarks) {
     const middleOpen = landmarks[12].y < landmarks[10].y;
     const ringOpen = landmarks[16].y < landmarks[14].y;
     const pinkyOpen = landmarks[20].y < landmarks[18].y;
-
     if (!indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return 'FIST';
     if (indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return 'ONE';
     if (indexOpen && middleOpen && !ringOpen && !pinkyOpen) return 'TWO';
@@ -569,34 +721,28 @@ function getGesture(landmarks) {
 
 function onResults(results) {
     if (appState === 'PHOTO_SEQUENCE' || appState === 'FIREWORKS_SEQUENCE') return;
-
     if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
         if(debugDiv) debugDiv.innerText = "未检测到手部";
         fistHoldCount = 0;
         return;
     }
-
     if (results.multiHandLandmarks.length === 2) {
         const hand1 = getGesture(results.multiHandLandmarks[0]);
         const hand2 = getGesture(results.multiHandLandmarks[1]);
-        
         if(debugDiv) debugDiv.innerText = `双手: ${hand1} + ${hand2}`;
-
         if (hand1 === 'OPEN' && hand2 === 'OPEN') {
             switchState('FIREWORKS_SEQUENCE');
             return;
         }
     }
-
     const landmarks = results.multiHandLandmarks[0];
     const gesture = getGesture(landmarks);
-    
     if(debugDiv && results.multiHandLandmarks.length === 1) debugDiv.innerText = `单手: ${gesture}\n握拳: ${fistHoldCount}`;
-
     if (gesture === 'FIST') {
         fistHoldCount++;
         if (fistHoldCount < 5) {
-            if (appState !== 'SPHERE') switchState('SPHERE');
+            // <-- 修改：握拳手势现在切换回行星状态 -->
+            if (appState !== 'PLANET') switchState('PLANET');
         } else if (fistHoldCount > FIST_TRIGGER_THRESHOLD) {
             switchState('PHOTO_SEQUENCE');
             fistHoldCount = 0;
@@ -612,21 +758,12 @@ function onResults(results) {
     }
 }
 
+// --- 7. 启动 ---
 
+initThree();
 
-
-// =================================================================
-// --- 8. 全新的启动流程 (手动控制摄像头，绕过 camera_utils) ---
-// =================================================================
-
-// 重新获取 video 元素，确保万无一失
 videoElement = document.getElementById('webcam-video');
-fireworksVideoElement = document.getElementById('fireworks-video');
-
-// 初始化 MediaPipe Hands
-const hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@medipe/hands/${file}`
-});
+const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@medipe/hands/${file}` });
 
 hands.setOptions({
     maxNumHands: 2,
@@ -634,114 +771,14 @@ hands.setOptions({
     minDetectionConfidence: 0.6,
     minTrackingConfidence: 0.5
 });
-
-// 设置结果回调函数
 hands.onResults(onResults);
 
-// 定义一个函数来启动摄像头和处理流程
-async function startCamera() {
-    try {
-        // 1. 使用浏览器原生 API 请求摄像头视频流
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-                facingMode: 'user' // 优先使用前置摄像头
-            }
-        });
-
-        // 2. 将视频流赋值给 video 元素
-        videoElement.srcObject = stream;
-
-        // 3. 添加一个监听器，确保在视频可以播放后才开始处理
-        videoElement.addEventListener('loadeddata', () => {
-            console.log("摄像头视频已加载，准备开始处理手势。");
-            if(debugDiv) debugDiv.innerText = "摄像头已启动，请做出手势。";
-
-            // 4. 开始播放视频 (虽然视频是隐藏的，但必须播放才能获取数据)
-            videoElement.play();
-
-            // 5. 启动一个循环，持续将视频帧发送给 MediaPipe
-            sendToMediaPipe();
-        });
-
-    } catch (error) {
-        console.error("启动摄像头失败:", error);
-        if (debugDiv) {
-            debugDiv.style.color = "#ffcc00";
-            debugDiv.innerText = `错误: 摄像头启动失败。\n原因: ${error.name}\n请检查设备和浏览器权限。`;
-        }
-        // 可以在这里启用备用的键盘控制
-        enableKeyboardControls();
-    }
-}
-
-// 定义将视频帧发送给 MediaPipe 的函数
-async function sendToMediaPipe() {
-    // 检查 video 元素是否已准备好，避免在视频暂停或结束时报错
-    if (videoElement.readyState >= 2) {
-        await hands.send({ image: videoElement });
-    }
-    // 使用 requestAnimationFrame 实现高效循环
-    requestAnimationFrame(sendToMediaPipe);
-}
-
-// 定义备用的键盘控制函数
-function enableKeyboardControls() {
-    if (debugDiv) {
-        debugDiv.innerText += "\n\n已启用键盘控制:\n[1,2,3] 数字\n[h] 爱心\n[s] 球体\n[p] 照片\n[f] 烟花";
-    }
-    window.addEventListener('keydown', (event) => {
-        switch(event.key) {
-            case '1': switchState('NUMBER_1'); break;
-            case '2': switchState('NUMBER_2'); break;
-            case '3': switchState('NUMBER_3'); break;
-            case 'h': switchState('HEART'); break;
-            case 's': switchState('SPHERE'); break;
-            case 'p': switchState('PHOTO_SEQUENCE'); break;
-            case 'f': switchState('FIREWORKS_SEQUENCE'); break;
-        }
-    });
-}
-
-// =================================================================
-// --- 9. 全新的、兼容移动端的启动流程 ---
-// =================================================================
-
-// 定义一个统一的启动函数
-function startExperience() {
-    // 隐藏启动按钮
-    const overlay = document.getElementById('start-overlay');
-    if (overlay) {
-        overlay.style.display = 'none';
-    }
-
-    // 启动 Three.js 场景
-    initThree();
-
-    // 启动摄像头和手势识别
-    startCamera();
-}
-
-// 获取启动按钮并添加点击事件监听器
-const startButton = document.getElementById('start-button');
-if (startButton) {
-    startButton.addEventListener('click', () => {
-        console.log("用户点击启动，开始体验...");
-        startExperience();
-    });
-} else {
-    // 如果没有找到按钮（例如在某些测试环境中），则直接启动
-    console.warn("未找到启动按钮，直接尝试启动。这在移动端可能失败。");
-    startExperience();
-}
-// --- 7. 启动 ---
-
-initThree();
-
-videoElement = document.getElementById('webcam-video');
-fireworksVideoElement = document.getElementById('fireworks-video');
-
-
-// --- 你的其他JS代码（从 initThree() 到 startCamera() 等）保持不变 ---
-// 注意：需要把 initThree() 的调用从文件顶部移到上面的 startExperience 函数中
+const cameraUtil = new Camera(videoElement, {
+    onFrame: async () => {
+        if(videoElement.readyState >= 2) await hands.send({ image: videoElement });
+    },
+    width: 640,
+    height: 480,
+    facingMode: 'user'
+});
+cameraUtil.start();
